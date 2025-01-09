@@ -20,6 +20,7 @@ namespace MiniMapLibrary.Scanner
 
         public IEnumerable<T> Scan()
         {
+            // ewwwwww
             IEnumerable<T>? found = GameObject.FindObjectsOfType(typeof(T))?.Select(x => (T)x);
 
             if (found is null)

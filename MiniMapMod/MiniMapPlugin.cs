@@ -15,28 +15,28 @@ namespace MiniMapMod
     [BepInPlugin("MiniMap", "Mini Map Mod", "3.3.2")]
     public class MiniMapPlugin : BaseUnityPlugin
     {
-        private ISpriteManager SpriteManager;
-
-        private readonly List<ITrackedObject> TrackedObjects = new();
-
-        private Minimap Minimap;
-
-        private readonly Range3D TrackedDimensions = new();
-
-        private bool Enable = true;
-
-        private bool ScannedStaticObjects = false;
+        public bool Enabled { get; private set; } = true;
 
         private IConfig config;
-
         private MiniMapLibrary.ILogger logger;
+
+        private ISpriteManager spriteManager;
 
         private ITrackedObjectScanner[] staticScanners;
         private ITrackedObjectScanner[] dynamicScanners;
 
+        private CameraRigController cameraRig;
+        private Minimap minimap;
+
+        private bool scannedStaticObjects = false;
+
         private readonly Timer dynamicScanTimer = new(5.0f);
         private readonly Timer cooldownTimer = new(2.0f, false) { Value = -1.0f };
-        private CameraRigController cameraRig;
+        private readonly List<ITrackedObject> trackedObjects = [];
+        private readonly Range3D trackedDimensions = new();
+
+        private static GameObject DefaultConverter<T>(T value) where T : MonoBehaviour => value ? value.gameObject : null;
+        private static bool DefaultSelector(object _) => true;
 
         public void Awake()
         {
@@ -44,10 +44,10 @@ namespace MiniMapMod
             // we can pass it to the business layer
             logger = new Log(base.Logger);
 
-            SpriteManager = new SpriteManager(logger);
+            spriteManager = new SpriteManager(logger);
 
             // create the minimap controller
-            Minimap = new(logger);
+            minimap = new(logger);
 
             // SETUP CONFIG
 
@@ -91,9 +91,9 @@ namespace MiniMapMod
         {
             if (UnityEngine.Input.GetKeyDown(Settings.MinimapKey))
             {
-                Enable = !Enable;
+                Enabled = !Enabled;
 
-                if (Enable == false)
+                if (Enabled == false)
                 {
                     logger.LogInfo("Resetting minimap");
                     Reset();
@@ -104,7 +104,7 @@ namespace MiniMapMod
             cooldownTimer.Update(Time.deltaTime);
             dynamicScanTimer.Update(Time.deltaTime);
 
-            if (Enable)
+            if (Enabled)
             {
                 // the main camera becomes null when the scene ends on death or quits
                 if (Camera.main == null)
@@ -114,36 +114,36 @@ namespace MiniMapMod
                     return;
                 }
 
-                if (Minimap.Created)
+                if (minimap.Created)
                 {
-                    try
+                    //try
+                    //{
+                    minimap.SetRotation(Camera.main.transform.rotation);
+
+                    UpdateIconPositions();
+
+                    if (Input.GetKeyDown(Settings.MinimapIncreaseScaleKey))
                     {
-                        Minimap.SetRotation(Camera.main.transform.rotation);
-
-                        UpdateIconPositions();
-
-                        if (Input.GetKeyDown(Settings.MinimapIncreaseScaleKey))
-                        {
-                            Minimap.Container.transform.localScale *= 1.1f;
-                        }else 
-                        if (Input.GetKeyDown(Settings.MinimapDecreaseScaleKey))
-                        {
-                            Minimap.Container.transform.localScale *= 0.90f;
-                        }
+                        Minimap.Container.transform.localScale *= 1.1f;
                     }
+                    else if (Input.GetKeyDown(Settings.MinimapDecreaseScaleKey))
+                    {
+                        Minimap.Container.transform.localScale *= 0.90f;
+                    }
+                    /*}
                     catch (NullReferenceException)
                     {
                         // we'll encounter null references when other mods or the game itself
                         // destroys entities we are tracking at runtime
                         logger.LogDebug($"{nameof(NullReferenceException)} was encountered while updating positions, reseting minimap");
                         Reset();
-                    }
+                    }*/
                 }
                 else
                 {
                     if (TryCreateMinimap())
                     {
-                        TrackedDimensions.Clear();
+                        trackedDimensions.Clear();
 
                         ScanScene();
                     }
@@ -154,16 +154,16 @@ namespace MiniMapMod
         private void UpdateIconPositions()
         {
             // only perform this calculation once per frame
-            Vector2 cameraPositionMinimap = GetPlayerPosition().ToMinimapPosition(TrackedDimensions);
+            Vector2 cameraPositionMinimap = GetPlayerPosition().ToMinimapPosition(trackedDimensions);
 
-            for (int i = 0; i < TrackedObjects.Count; i++)
+            for (int i = 0; i < trackedObjects.Count; i++)
             {
-                ITrackedObject item = TrackedObjects[i];
+                ITrackedObject item = trackedObjects[i];
 
                 // if we dont have a reference to the gameobject any more, remove it and continue
                 if (item.gameObject == null)
                 {
-                    TrackedObjects.RemoveAt(i);
+                    trackedObjects.RemoveAt(i);
 
                     // if we still have a icon for the now discarded item destroy it
                     if (item.MinimapTransform != null)
@@ -177,13 +177,13 @@ namespace MiniMapMod
                 // convert the world positions to minimap positions
                 // remember the minimap is calculated on a scale from 0d to 1d where 0d is the least most coord of any interactible and 1d is the largest coord of any interactible
 
-                Vector2 itemMinimapPosition = item.gameObject.transform.position.ToMinimapPosition(TrackedDimensions) - cameraPositionMinimap;
+                Vector2 itemMinimapPosition = item.gameObject.transform.position.ToMinimapPosition(trackedDimensions) - cameraPositionMinimap;
 
                 // there exists no icon when .MinimapTransform is null
                 if (item.MinimapTransform == null)
                 {
                     // create one
-                    item.MinimapTransform = Minimap.CreateIcon(item.InteractableType, itemMinimapPosition, this.SpriteManager);
+                    item.MinimapTransform = minimap.CreateIcon(item.InteractableType, itemMinimapPosition, this.spriteManager);
                 }
                 else
                 {
@@ -206,15 +206,15 @@ namespace MiniMapMod
         {
             GameObject objectivePanel = GameObject.Find("ObjectivePanel");
 
-            if (objectivePanel == null || this.SpriteManager == null)
+            if (objectivePanel == null || this.spriteManager == null)
             {
-                Minimap.Destroy();
+                minimap.Destroy();
                 return false;
             }
 
             logger.LogInfo("Creating Minimap object");
 
-            Minimap.CreateMinimap(this.SpriteManager, objectivePanel.gameObject);
+            minimap.CreateMinimap(this.spriteManager, objectivePanel.gameObject);
 
             Minimap.Container.transform.localScale = Vector3.one * Settings.MinimapScale;
 
@@ -225,20 +225,20 @@ namespace MiniMapMod
 
         private void Reset()
         {
-            logger.LogDebug($"Clearing {nameof(TrackedObjects)}");
-            TrackedObjects.Clear();
+            logger.LogDebug($"Clearing {nameof(trackedObjects)}");
+            trackedObjects.Clear();
 
-            logger.LogDebug($"Clearing {nameof(TrackedDimensions)}");
-            TrackedDimensions.Clear();
+            logger.LogDebug($"Clearing {nameof(trackedDimensions)}");
+            trackedDimensions.Clear();
 
-            logger.LogDebug($"Destroying {nameof(Minimap)}");
-            Minimap.Destroy();
+            logger.LogDebug($"Destroying {nameof(minimap)}");
+            minimap.Destroy();
 
             dynamicScanTimer.Reset();
             cooldownTimer.Reset();
 
             // mark the scene as scannable again so we scan for chests etc..
-            ScannedStaticObjects = false;
+            scannedStaticObjects = false;
 
             cameraRig = null;
         }
@@ -246,7 +246,7 @@ namespace MiniMapMod
         private void ScanScene()
         {
             // don't scan if the minimap isn't enabled
-            if (Enable == false)
+            if (Enabled == false)
             {
                 return;
             }
@@ -259,7 +259,8 @@ namespace MiniMapMod
                 if (cooldownTimer.Started is false)
                 {
                     cooldownTimer.Start();
-                }else if (cooldownTimer.Expired is false)
+                }
+                else if (cooldownTimer.Expired is false)
                 {
                     return;
                 }
@@ -291,7 +292,7 @@ namespace MiniMapMod
         {
             bool TryGetPurchaseToken<T>(T value, out string out_token) where T : MonoBehaviour
             {
-                var token = value?.GetComponent<PurchaseInteraction>()?.contextToken;
+                var token = value ? value.GetComponent<PurchaseInteraction>()?.contextToken : null;
 
                 // mods that implement ChestBehaviour, may not also PurchaseInteraction
                 if (token is null)
@@ -325,79 +326,70 @@ namespace MiniMapMod
                 return false;
             }
 
-            return new MultiKindScanner<ChestBehavior>(false,
-                new MonoBehaviorScanner<ChestBehavior>(logger), new MonoBehaviourSorter<ChestBehavior>(
-                    new ISorter<ChestBehavior>[] {
-                        new DefaultSorter<ChestBehavior>(InteractableKind.Chest, x => x.gameObject, ChestSelector, activeChecker),
-                        new DefaultSorter<ChestBehavior>(InteractableKind.LunarPod,  x => x.gameObject, LunarPodSelector, activeChecker),
-                    }
-                ), TrackedDimensions, SpriteManager, () => GetPlayerPosition().y);
+            return new MultiKindScanner<ChestBehavior>(false, new MonoBehaviorScanner<ChestBehavior>(logger),
+                new MonoBehaviourSorter<ChestBehavior>(
+                [
+                    new DefaultSorter<ChestBehavior>(InteractableKind.Chest, x => x.gameObject, ChestSelector, activeChecker),
+                    new DefaultSorter<ChestBehavior>(InteractableKind.LunarPod,  x => x.gameObject, LunarPodSelector, activeChecker),
+                ]), trackedDimensions, spriteManager, () => GetPlayerPosition().y);
         }
 
         private ITrackedObjectScanner CreateGenericInteractionScanner()
         {
-            bool PortalSelector(GenericInteraction interaction) => interaction?.contextToken?.Contains("PORTAL") ?? false;
+            bool PortalSelector(GenericInteraction interaction) => interaction && (interaction.contextToken?.Contains("PORTAL") ?? false);
 
-            bool DefaultSelector(GenericInteraction interaction) => true;
+            bool GenericActiveChecker(GenericInteraction interaction) => !interaction || interaction.isActiveAndEnabled;
 
-            bool GenericActiveChecker(GenericInteraction interaction) => interaction?.isActiveAndEnabled ?? true;
-
-            GameObject DefaultConverter<T>(T value) where T : MonoBehaviour => value?.gameObject;
-
-            return new MultiKindScanner<GenericInteraction>(false,
-                new MonoBehaviorScanner<GenericInteraction>(logger), new MonoBehaviourSorter<GenericInteraction>(
-                    new ISorter<GenericInteraction>[] {
-                        new DefaultSorter<GenericInteraction>(InteractableKind.Portal, DefaultConverter, PortalSelector, GenericActiveChecker),
-                        new DefaultSorter<GenericInteraction>(InteractableKind.Special, DefaultConverter, DefaultSelector, GenericActiveChecker)
-                    }
-                ), TrackedDimensions, SpriteManager, () => GetPlayerPosition().y);
+            return new MultiKindScanner<GenericInteraction>(false, new MonoBehaviorScanner<GenericInteraction>(logger),
+                new MonoBehaviourSorter<GenericInteraction>(
+                [
+                    new DefaultSorter<GenericInteraction>(InteractableKind.Portal, DefaultConverter, PortalSelector, GenericActiveChecker),
+                    new DefaultSorter<GenericInteraction>(InteractableKind.Special, DefaultConverter, DefaultSelector, GenericActiveChecker)
+                ]), trackedDimensions, spriteManager, () => GetPlayerPosition().y);
         }
 
         private ITrackedObjectScanner CreatePurchaseInteractionScanner()
         {
-            bool FanSelector(PurchaseInteraction interaction) => interaction?.contextToken == "FAN_CONTEXT";
+            bool FanSelector(PurchaseInteraction interaction) => interaction && interaction.contextToken == "FAN_CONTEXT";
 
-            bool PrinterSelector(PurchaseInteraction interaction) => interaction?.contextToken?.Contains("DUPLICATOR") ?? false;
+            bool PrinterSelector(PurchaseInteraction interaction) => interaction && (interaction.contextToken?.Contains("DUPLICATOR") ?? false);
 
-            bool ShopSelector(PurchaseInteraction interaction) => interaction?.contextToken?.Contains("TERMINAL") ?? false;
+            bool ShopSelector(PurchaseInteraction interaction) => interaction && (interaction.contextToken?.Contains("TERMINAL") ?? false);
 
-            bool EquipmentSelector(PurchaseInteraction interaction) => interaction?.contextToken?.Contains("EQUIPMENTBARREL") ?? false;
+            bool EquipmentSelector(PurchaseInteraction interaction) => interaction && (interaction.contextToken?.Contains("EQUIPMENTBARREL") ?? false);
 
-            bool GoldShoresSelector(PurchaseInteraction interaction) => interaction?.contextToken?.Contains("GOLDSHORE") ?? false;
+            bool GoldShoresSelector(PurchaseInteraction interaction) => interaction && (interaction.contextToken?.Contains("GOLDSHORE") ?? false);
 
-            bool GoldShoresBeaconSelector(PurchaseInteraction interaction) => interaction?.contextToken?.Contains("TOTEM") ?? false;
+            bool GoldShoresBeaconSelector(PurchaseInteraction interaction) => interaction && (interaction.contextToken?.Contains("TOTEM") ?? false);
 
-            bool InteractionActiveChecker(PurchaseInteraction interaction) => interaction?.available ?? true;
+            bool InteractionActiveChecker(PurchaseInteraction interaction) => !interaction || interaction.available;
 
-            GameObject DefaultConverter<T>(T value) where T : MonoBehaviour => value?.gameObject;
-
-            return new MultiKindScanner<PurchaseInteraction>(false,
-                new MonoBehaviorScanner<PurchaseInteraction>(logger), new MonoBehaviourSorter<PurchaseInteraction>(
-                    new ISorter<PurchaseInteraction>[] {
-                        new DefaultSorter<PurchaseInteraction>(InteractableKind.Printer, DefaultConverter, PrinterSelector, InteractionActiveChecker),
-                        new DefaultSorter<PurchaseInteraction>(InteractableKind.Special, DefaultConverter, FanSelector, InteractionActiveChecker),
-                        new DefaultSorter<PurchaseInteraction>(InteractableKind.Shop, DefaultConverter, ShopSelector, InteractionActiveChecker),
-                        new DefaultSorter<PurchaseInteraction>(InteractableKind.Equipment, DefaultConverter, EquipmentSelector, InteractionActiveChecker),
-                        new DefaultSorter<PurchaseInteraction>(InteractableKind.Portal, DefaultConverter, GoldShoresSelector, InteractionActiveChecker),
-                        new DefaultSorter<PurchaseInteraction>(InteractableKind.Totem, DefaultConverter, GoldShoresBeaconSelector, GoldShoresSelector),
-                    }
-                ), TrackedDimensions, SpriteManager, () => GetPlayerPosition().y);
+            return new MultiKindScanner<PurchaseInteraction>(false, new MonoBehaviorScanner<PurchaseInteraction>(logger),
+                new MonoBehaviourSorter<PurchaseInteraction>(
+                [
+                    new DefaultSorter<PurchaseInteraction>(InteractableKind.Printer, DefaultConverter, PrinterSelector, InteractionActiveChecker),
+                    new DefaultSorter<PurchaseInteraction>(InteractableKind.Special, DefaultConverter, FanSelector, InteractionActiveChecker),
+                    new DefaultSorter<PurchaseInteraction>(InteractableKind.Shop, DefaultConverter, ShopSelector, InteractionActiveChecker),
+                    new DefaultSorter<PurchaseInteraction>(InteractableKind.Equipment, DefaultConverter, EquipmentSelector, InteractionActiveChecker),
+                    new DefaultSorter<PurchaseInteraction>(InteractableKind.Portal, DefaultConverter, GoldShoresSelector, InteractionActiveChecker),
+                    new DefaultSorter<PurchaseInteraction>(InteractableKind.Totem, DefaultConverter, GoldShoresBeaconSelector, GoldShoresSelector),
+                ]), trackedDimensions, spriteManager, () => GetPlayerPosition().y);
         }
 
         private void CreateStaticScanners()
         {
-            GameObject DefaultConverter<T>(T value) where T: MonoBehaviour => value?.gameObject;
-
             bool DefaultActiveChecker<T>(T value) where T: MonoBehaviour
             {
+                // default always active;
+                if (!value)
+                    return true;
+
                 if (value is PurchaseInteraction isInteraction)
                 {
                     return isInteraction.available;
                 }
 
-                PurchaseInteraction interaction = value?.GetComponent<PurchaseInteraction>();
-
-                if (interaction != null) 
+                if (value.TryGetComponent<PurchaseInteraction>(out var interaction)) 
                 {
                     return interaction.available;
                 }
@@ -412,8 +404,8 @@ namespace MiniMapMod
                     kind: kind,
                     dynamic: false,
                     scanner: new MonoBehaviorScanner<T>(logger),
-                    range: TrackedDimensions,
-                    spriteManager: SpriteManager,
+                    range: trackedDimensions,
+                    spriteManager: spriteManager,
                     playerHeightRetriever: () => GetPlayerPosition().y,
                     converter: converter ?? DefaultConverter,
                     activeChecker: activeChecker ?? DefaultActiveChecker,
@@ -441,27 +433,33 @@ namespace MiniMapMod
 
         private ITrackedObjectScanner CreateAliveEntityScanner()
         {
-            bool EnemyMonsterSelector(TeamComponent team) => team?.teamIndex == TeamIndex.Monster;
+            bool EnemyMonsterSelector(TeamComponent team) => team && team.teamIndex == TeamIndex.Monster;
 
-            bool EnemyLunarSelector(TeamComponent team) => team?.teamIndex == TeamIndex.Lunar;
+            bool EnemyLunarSelector(TeamComponent team) => team && team.teamIndex == TeamIndex.Lunar;
 
-            bool EnemyVoidSelector(TeamComponent team) => team?.teamIndex == TeamIndex.Void;
+            bool EnemyVoidSelector(TeamComponent team) => team && team.teamIndex == TeamIndex.Void;
 
-            bool NeutralSelector(TeamComponent team) => team?.teamIndex == TeamIndex.Neutral;
+            bool NeutralSelector(TeamComponent team) => team && team.teamIndex == TeamIndex.Neutral;
 
             bool MinionSelector(TeamComponent team)
             {
-                var isAlly = team?.teamIndex == TeamIndex.Player;
-                var isPlayer = team?.GetComponent<CharacterBody>()?.isPlayerControlled;
-                if (isPlayer is null)
+                if (!team)
+                    return false;
+
+                var isAlly = team.teamIndex == TeamIndex.Player;
+                if (!team.body)
                 {
                     return isAlly;
                 }
-                return isAlly && (isPlayer == false);
+
+                return isAlly && !team.body.isPlayerControlled;
             }
 
             bool PlayerSelector(TeamComponent team)
             {
+                if (!team)
+                    return false;
+
                 var isOwner = team?.GetComponent<NetworkStateMachine>()?.hasAuthority;
                 var isPlayer = team?.GetComponent<CharacterBody>()?.isPlayerControlled;
                 if (isOwner is null || isPlayer is null)
@@ -471,20 +469,16 @@ namespace MiniMapMod
                 return (isOwner == false) && (isPlayer == true);
             }
 
-            GameObject DefaultConverter<T>(T value) where T : MonoBehaviour => value?.gameObject;
-
-            return new MultiKindScanner<TeamComponent>(true,
-                new MonoBehaviorScanner<TeamComponent>(logger), new MonoBehaviourSorter<TeamComponent>(
-                    new ISorter<TeamComponent>[]
-                    {
-                        new DefaultSorter<TeamComponent>(InteractableKind.EnemyMonster, DefaultConverter, EnemyMonsterSelector, x => true),
-                        new DefaultSorter<TeamComponent>(InteractableKind.EnemyLunar, DefaultConverter, EnemyLunarSelector, x => true),
-                        new DefaultSorter<TeamComponent>(InteractableKind.EnemyVoid, DefaultConverter, EnemyVoidSelector, x => true),
-                        new DefaultSorter<TeamComponent>(InteractableKind.Minion, DefaultConverter, MinionSelector, x => true),
-                        new DefaultSorter<TeamComponent>(InteractableKind.Player, DefaultConverter, PlayerSelector, x => true),
-                        new DefaultSorter<TeamComponent>(InteractableKind.Neutral, DefaultConverter, NeutralSelector, x => x?.gameObject.activeSelf ?? true),
-                    }
-                ), TrackedDimensions, SpriteManager, () => GetPlayerPosition().y);
+            return new MultiKindScanner<TeamComponent>(true, new MonoBehaviorScanner<TeamComponent>(logger), 
+                new MonoBehaviourSorter<TeamComponent>(
+                [
+                    new DefaultSorter<TeamComponent>(InteractableKind.EnemyMonster, DefaultConverter, EnemyMonsterSelector, DefaultSelector),
+                    new DefaultSorter<TeamComponent>(InteractableKind.EnemyLunar, DefaultConverter, EnemyLunarSelector, DefaultSelector),
+                    new DefaultSorter<TeamComponent>(InteractableKind.EnemyVoid, DefaultConverter, EnemyVoidSelector, DefaultSelector),
+                    new DefaultSorter<TeamComponent>(InteractableKind.Minion, DefaultConverter, MinionSelector, DefaultSelector),
+                    new DefaultSorter<TeamComponent>(InteractableKind.Player, DefaultConverter, PlayerSelector, DefaultSelector),
+                    new DefaultSorter<TeamComponent>(InteractableKind.Neutral, DefaultConverter, NeutralSelector, x => !x || x.gameObject.activeSelf),
+                ]), trackedDimensions, spriteManager, () => GetPlayerPosition().y);
         }
 
         private Vector3 GetPlayerPosition()
@@ -511,8 +505,8 @@ namespace MiniMapMod
                     kind: InteractableKind.Item,
                     dynamic: true,
                     scanner: new MonoBehaviorScanner<GenericPickupController>(logger),
-                    range: TrackedDimensions,
-                    spriteManager: SpriteManager,
+                    range: trackedDimensions,
+                    spriteManager: spriteManager,
                     playerHeightRetriever: () => GetPlayerPosition().y,
                     converter: x => x.gameObject,
                     activeChecker: x => true
@@ -524,42 +518,42 @@ namespace MiniMapMod
         private void ScanStaticTypes()
         {
             // if we have alreadys scanned don't scan again until we die or the scene changes (this method has sever performance implications)
-            if (ScannedStaticObjects)
+            if (scannedStaticObjects)
             {
                 return;
             }
 
             for (int i = 0; i < staticScanners.Length; i++)
             {
-                staticScanners[i].ScanScene(TrackedObjects);
+                staticScanners[i].ScanScene(trackedObjects);
             }
 
-            ScannedStaticObjects = true;
+            scannedStaticObjects = true;
         }
 
         private void ScanDynamicTypes()
         {
             for (int i = 0; i < dynamicScanners.Length; i++)
             {
-                dynamicScanners[i].ScanScene(TrackedObjects);
+                dynamicScanners[i].ScanScene(trackedObjects);
             }
         }
 
         private void ClearDynamicTrackedObjects()
         {
-            if (ScannedStaticObjects is false)
+            if (scannedStaticObjects is false)
             {
                 return;
             }
 
-            for (int i = 0; i < TrackedObjects.Count; i++)
+            for (int i = 0; i < trackedObjects.Count; i++)
             {
-                var obj = TrackedObjects[i];
+                var obj = trackedObjects[i];
 
                 if (obj.DynamicObject)
                 {
                     obj.Destroy();
-                    TrackedObjects.RemoveAt(i);
+                    trackedObjects.RemoveAt(i);
                 }
             }
         }
